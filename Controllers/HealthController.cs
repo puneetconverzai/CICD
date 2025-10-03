@@ -20,9 +20,8 @@ public class HealthController : ControllerBase
     public async Task<IActionResult> Get()
     {
         _logger.LogInformation("Health check requested");
-        
+
         var healthStatus = await _healthCheckService.CheckHealthAsync();
-        
         var response = new
         {
             Status = healthStatus.Status.ToString(),
