@@ -26,16 +26,16 @@ jobs:
         dotnet-version: '8.0.x'
 
     - name: Restore dependencies
-      run: dotnet restore
+      run: dotnet restore CICD.sln
 
     - name: Build
-      run: dotnet build --no-restore
+      run: dotnet build CICD.sln --no-restore
 
     - name: Test
-      run: dotnet test --no-build --verbosity normal
+      run: dotnet test CICD.sln --no-build --verbosity normal
 
     - name: Lint
-      run: dotnet format --verify-no-changes --verbosity diagnostic
+      run: dotnet format CICD.sln --verify-no-changes --verbosity diagnostic
 
   build-and-push:
     needs: test
