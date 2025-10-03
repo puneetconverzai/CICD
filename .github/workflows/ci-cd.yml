@@ -45,14 +45,23 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+    
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v2
 
-    - name: Authenticate with Google Cloud
+    - name: Authenticate with raw access token
       run: |
-        gcloud auth login --access-token='${{ secrets.GCP_ACCESS_TOKEN }}'
-        gcloud config set project ${{ env.PROJECT_ID }}
+          cat > token.json <<EOF
+          {
+            "access_token": "${{ secrets.GCP_ACCESS_TOKEN }}",
+            "token_type": "Bearer",
+            "expiry": "2999-12-31T00:00:00Z"
+          }
+          EOF
+
+          gcloud auth login --brief --access-token-file=token.json
+          gcloud auth list  
 
     - name: Configure Docker to use gcloud as a credential helper
       run: gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev
