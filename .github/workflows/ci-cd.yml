@@ -1,0 +1,126 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PROJECT_ID: nebula-job-board
+  GAR_LOCATION: us
+  REPOSITORY: nebula-registry
+  REGION: us-east1
+  CLUSTER_NAME: gke_nebula-job-board_us-east1_nebula-dev-cluster-1
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Build
+      run: dotnet build --no-restore
+
+    - name: Test
+      run: dotnet test --no-build --verbosity normal
+
+    - name: Lint
+      run: dotnet format --verify-no-changes --verbosity diagnostic
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Google Auth
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        access_token: ${{ secrets.GCP_ACCESS_TOKEN }}
+
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v2
+
+    - name: Configure Docker to use gcloud as a credential helper
+      run: gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev
+
+    - name: Build and push Docker image
+      run: |
+        # Get the short commit SHA
+        SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+        
+        # Build and tag the image
+        docker build -t $GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/cicd-poc-app:$SHORT_SHA .
+        docker build -t $GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/cicd-poc-app:latest .
+        
+        # Push the image
+        docker push $GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/cicd-poc-app:$SHORT_SHA
+        docker push $GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/cicd-poc-app:latest
+
+    - name: Update Kubernetes manifests
+      run: |
+        # Update the image tag in deployment.yaml
+        sed -i "s|gcr.io/PROJECT_ID/cicd-poc-app:latest|$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/cicd-poc-app:$SHORT_SHA|g" k8s/deployment.yaml
+
+    - name: Deploy to GKE
+      run: |
+        # Get GKE credentials
+        gcloud container clusters get-credentials $CLUSTER_NAME --region $REGION --project $PROJECT_ID
+        
+        # Apply Kubernetes manifests
+        kubectl apply -f k8s/namespace.yaml
+        kubectl apply -f k8s/deployment.yaml
+        kubectl apply -f k8s/service.yaml
+        kubectl apply -f k8s/ingress.yaml
+        kubectl apply -f k8s/hpa.yaml
+        
+        # Wait for deployment to be ready
+        kubectl rollout status deployment/cicd-poc-app -n cicd-poc --timeout=300s
+
+    - name: Verify deployment
+      run: |
+        # Get the external IP
+        kubectl get service cicd-poc-app-service -n cicd-poc
+        
+        # Check if pods are running
+        kubectl get pods -n cicd-poc
+        
+        # Check deployment status
+        kubectl get deployment cicd-poc-app -n cicd-poc
+
+  security-scan:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
